@@ -1,2 +1,2 @@
 # SCLScripts
-Supply Chain Simulation or Optimization Scripts
+Supply Chain Simulation and Optimization Scripts

@@ -47,7 +47,7 @@ class SqlConnect:
 
     def __exit__(self, exception_type, exception_value, traceback_val):
         if exception_type:
-            print(f"some error happened {self.db_id} {exception_type} {exception_value} {str(traceback_val)}")
+            print(f"some error happened {self.db_path} {exception_type} {exception_value} {str(traceback_val)}")
             traceback.print_exc()
             try:
                 self.cursor.execute("ROLLBACK")

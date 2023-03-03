@@ -11,6 +11,7 @@ class SupplyChain:
         self.backorders = {}
         self.local_demand = {}
         self.scheduled_receipts = {}
+        self.opening_inventory = {}
 
     def update_demand(self):
         for item in self.inv_data:
@@ -51,9 +52,12 @@ class SupplyChain:
     def inventory_control(self):
         for item in self.inv_data:
             for location in self.inv_data[item]:
-                print(item, location, self.on_hand_inv[item][location] )
                 receipt_qty = sum(self.in_transit[item][location][t]
                                   for t in self.in_transit.get(item, {}).get(location, {}))
+                source_location = self.tp_data.get(item, {}).get(location, None)
+                if source_location:
+                    receipt_qty += sum(row[1] if row[0] == location else 0 for row in
+                                       self.dependent_demand.get(item, {}).get(source_location, {}))
                 dependent_demand = sum(row[1] for row in
                                        self.dependent_demand.get(item, {}).get(location, {}))
                 projected_inv = self.on_hand_inv[item][location] + receipt_qty - \
@@ -71,7 +75,7 @@ class SupplyChain:
                 if qty == 0:
                     continue
                 i += 1
-
+                print(item, location, t, qty )
                 if location not in self.tp_data.get(item, {}):
                     self.start_production(item, location, qty, t)
                 else:
@@ -84,14 +88,22 @@ class SupplyChain:
         for item in self.dependent_demand:
             for location in self.dependent_demand[item]:
                 on_hand_qty = self.on_hand_inv[item][location]
-                if on_hand_qty == 0:
+                if on_hand_qty == 0 or len(self.dependent_demand[item][location]) == 0:
                     continue
-                for destination_location, order_qty in self.dependent_demand[item][location]:
+                for idx, row in enumerate(self.dependent_demand[item][location]):
+                    destination_location = row[0]
+                    order_qty = row[1]
+                    if order_qty == 0:
+                        continue
                     ship_qty = min(order_qty, on_hand_qty)
                     self.start_transit(item, location, destination_location, ship_qty, t)
-                    on_hand_qty = on_hand_qty - ship_qty
+                    on_hand_qty = self.on_hand_inv[item][location]
+                    self.dependent_demand[item][location][idx] = (destination_location, order_qty - ship_qty)
                     if on_hand_qty == 0:
                         break
+                while len(self.dependent_demand[item][location]) > 0 \
+                        and self.dependent_demand[item][location][0][1] == 0:
+                    self.dependent_demand[item][location].pop(0)
 
     def start_transit(self, item, location, destination, qty, t):
         if qty == 0:
@@ -123,6 +135,10 @@ class SupplyChain:
                     qty = self.in_transit[item][location][t]
                     self.on_hand_inv[item][location] += qty
                     self.in_transit[item][location][t] = 0
+
+    def initialize_opening_inv(self):
+        self.opening_inventory = self.on_hand_inv.copy()
+
 
 
 

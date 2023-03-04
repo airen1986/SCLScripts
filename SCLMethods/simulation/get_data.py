@@ -1,50 +1,40 @@
-from .queries import get_inventory_sql, get_transportation_sql
+from .queries import *
 
 
-def get_inventory_data(conn):
-    inventory = {}
-    zero_dict = {}
-    for item, location, moq, lt_mean, lt_std_dev, demand_mean, demand_std_dev, r_val \
-            in conn.execute(get_inventory_sql):
-        demand = (float(demand_mean), float(demand_std_dev))
-        lead_time = (float(lt_mean), float(lt_std_dev))
-        row_dict = {'demand': demand, 'lead_time': lead_time,
-                    'moq': float(moq), 'r_val': float(r_val)}
-        if item not in inventory:
-            inventory[item] = {location: row_dict}
-            zero_dict[item] = {location: 0}
+def populate_active_combinations(conn):
+    conn.execute(delete_active_combinations)
+    conn.execute(insert_forecast_query)
+    ct = 1
+    while ct > 0:
+        conn.execute(tp_insert_query)
+        ct = conn.execute("select changes()").fetchone()[0]
+        if ct == 0:
+            conn.execute(bom_insert_query)
+            ct = conn.execute("select changes()").fetchone()[0]
+
+
+def get_combinations(conn):
+    populate_active_combinations(conn)
+    item_locations = {}
+    for row in conn.execute(get_combinations_sql):
+        item = row[0]
+        location = row[1]
+        data_dict = {
+            'source': row[2], 'demand': (float(row[3]), float(row[4])),
+            'moq': float(row[5]), 'on_hand_qty': float(row[5])/2, 'r_val': float(row[6]),
+            'lead_time': (float(row[7]), float(row[8])), 'opening_inv': 0,
+            'backorder_qty': 0, 'forecast_qty': 0, 'shipped_qty': 0, 'ordered_qty': 0,
+            'transit_qty': {}, 'wip_qty': {}, 'dependent_demand': [], 'receipt_qty': 0,
+            'open_orders': 0
+        }
+        if item not in item_locations:
+            item_locations[item] = {location: data_dict}
         else:
-            inventory[item][location] = row_dict
-            zero_dict[item][location] = 0
-    return inventory, zero_dict
+            item_locations[item][location] = data_dict
+    return item_locations
 
 
-def get_transportation(conn):
-    transportation = {}
-    for item, location, source in conn.execute(get_transportation_sql):
-        if item not in transportation:
-            transportation[item] = {location: source}
-        else:
-            transportation[item][location] = source
-    return transportation
 
 
-def initialize_inventory(inv_data):
-    on_hand = {}
-    open_order = {}
-    in_transit = {}
-    wip = {}
-    dependent_demand = {}
-    for item in inv_data:
-        on_hand[item] = {}
-        open_order[item] = {}
-        in_transit[item] = {}
-        wip[item] = {}
-        dependent_demand[item] = {}
-    for location in inv_data[item]:
-            on_hand[item][location] = inv_data[item][location]['moq'] / 2
-            open_order[item][location] = 0
-            in_transit[item][location] = {}
-            wip[item][location] = {}
-            dependent_demand[item][location] = []
-    return on_hand, open_order, in_transit, wip, dependent_demand
+
+

@@ -1,158 +1,151 @@
 from random import normalvariate
-from copy import deepcopy
-from .queries import planning_insert_query
-from .get_data import get_inventory_data, get_transportation, initialize_inventory
+from .queries import planning_insert_query, delete_planning_data
+from .get_data import get_combinations
 
 
 class SupplyChain:
     def __init__(self, conn):
-        self.inv_data, self.zero_dict = get_inventory_data(conn)
-        self.tp_data = get_transportation(conn)
-        self.on_hand_inv, self.open_order, self.in_transit,\
-            self.wip, self.dependent_demand = initialize_inventory(self.inv_data)
-        self.backorders = deepcopy(self.zero_dict)
-        self.local_demand = {}
-        self.scheduled_receipts = {}
-        self.opening_inventory = {}
-        self.shipped_qty = {}
-        self.received_qty = {}
-        self.forecast_qty = {}
-        self.ordered_qty = {}
-        conn.execute("DELETE FROM planning_data")
+        self.inv_data = get_combinations(conn)
+        self.open_orders = {}
+        conn.execute(delete_planning_data)
         conn.intermediate_commit()
 
-    def update_demand(self):
-        for item in self.inv_data:
-            self.local_demand[item] = {}
-            for location in self.inv_data[item]:
-                demand_mean, demand_std_dev = self.inv_data[item][location]['demand']
-                if demand_mean > 0:
-                    demand_qty = normalvariate(demand_mean, demand_std_dev)/7
-                    self.local_demand[item][location] = demand_qty
-                else:
-                    self.local_demand[item][location] = 0
-
     def ship_backorders(self):
-        for item in self.backorders:
-            for location in self.backorders[item]:
-                if self.backorders[item][location] == 0:
-                    continue
-                ship_qty = min(self.on_hand_inv[item][location], self.backorders[item][location])
-                self.on_hand_inv[item][location] -= ship_qty
-                self.backorders[item][location] -= ship_qty
-                self.shipped_qty[item][location] += ship_qty
+        for item in self.inv_data:
+            for location in self.inv_data[item]:
+                data = self.inv_data[item][location]
+                backorder_qty = data['backorder_qty']
+                on_hand_qty = data['on_hand_qty']
+                ship_qty = min(on_hand_qty, backorder_qty)
+                data['on_hand_qty'] -= ship_qty
+                data['backorder_qty'] -= ship_qty
+                data['shipped_qty'] += ship_qty
 
     def ship_local_demand(self):
-        for item in self.local_demand:
-            for location in self.local_demand[item]:
-                demand_qty = self.local_demand[item][location]
-                ship_qty = min(self.on_hand_inv[item][location], demand_qty)
-                if ship_qty <= 0:
-                    self.backorders[item][location] += demand_qty
-                    continue
-                self.on_hand_inv[item][location] -= ship_qty
-                self.shipped_qty[item][location] += ship_qty
-                if ship_qty < demand_qty:
-                    remaining_qty = demand_qty - ship_qty
-                    self.backorders[item][location] += remaining_qty
+        for item in self.inv_data:
+            for location in self.inv_data[item]:
+                data = self.inv_data[item][location]
+                on_hand_qty = data['on_hand_qty']
+                demand_qty = data['forecast_qty']
+                ship_qty = min(on_hand_qty, demand_qty)
+                remaining_qty = demand_qty - ship_qty
+                data['on_hand_qty'] -= ship_qty
+                data['backorder_qty'] += remaining_qty
+                data['shipped_qty'] += ship_qty
 
     def inventory_control(self):
         for item in self.inv_data:
             for location in self.inv_data[item]:
-                receipt_qty = sum(self.in_transit[item][location][t]
-                                  for t in self.in_transit.get(item, {}).get(location, {}))
-                source_location = self.tp_data.get(item, {}).get(location, None)
+                data = self.inv_data[item][location]
+                receipt_qty = sum(data['transit_qty'][t] for t in data['transit_qty'])
+                receipt_qty += sum(data['wip_qty'][t] for t in data['wip_qty'])
+                source_location = data['source']
                 if source_location:
                     receipt_qty += sum(row[1] if row[0] == location else 0 for row in
-                                       self.dependent_demand.get(item, {}).get(source_location, {}))
-                dependent_demand = sum(row[1] for row in
-                                       self.dependent_demand.get(item, {}).get(location, {}))
-                projected_inv = self.on_hand_inv[item][location] + receipt_qty - \
-                                self.backorders[item][location] - dependent_demand
-                if projected_inv <= self.inv_data[item][location]['r_val']:
-                    revised_r_val = 2 * self.inv_data[item][location]['r_val'] - projected_inv
-                    order_qty = max(revised_r_val, self.inv_data[item][location]['moq'])
-                    self.open_order[item][location] = order_qty
-                    self.ordered_qty[item][location] += order_qty
+                                       self.inv_data[item][source_location]['dependent_demand'])
+                receipt_qty -= sum(row[1] for row in data['dependent_demand'])
+                projected_inv = data['on_hand_qty'] + receipt_qty - data['backorder_qty']
+
+                if projected_inv <= data['r_val']:
+                    revised_r_val = 2 * data['r_val'] - projected_inv
+                    order_qty = max(revised_r_val, data['moq'])
+                    data['ordered_qty'] += order_qty
+                    data['open_orders'] = order_qty
 
     def process_orders(self, t):
         i = 0
-        for item in self.open_order:
-            for location in self.open_order[item]:
-                qty = self.open_order[item][location]
+        for item in self.inv_data:
+            for location in self.inv_data[item]:
+                data = self.inv_data[item][location]
+                qty = data['open_orders']
                 if qty == 0:
                     continue
                 i += 1
-                if location not in self.tp_data.get(item, {}):
+                source = data['source']
+                if source is None:
                     self.start_production(item, location, qty, t)
                 else:
-                    source = self.tp_data[item][location]
-                    self.dependent_demand[item][source].append((location, qty))
-                self.open_order[item][location] = 0
+                    self.inv_data[item][source]['dependent_demand'].append((location, qty))
+                data['open_orders'] = 0
         return i
 
     def ship_dependent_demand(self, t):
-        for item in self.dependent_demand:
-            for location in self.dependent_demand[item]:
-                on_hand_qty = self.on_hand_inv[item][location]
-                if on_hand_qty == 0 or len(self.dependent_demand[item][location]) == 0:
+        for item in self.inv_data:
+            for location in self.inv_data[item]:
+                data = self.inv_data[item][location]
+                on_hand_qty = data['on_hand_qty']
+                dependent_demand = data['dependent_demand']
+                if on_hand_qty == 0 or len(dependent_demand) == 0:
                     continue
-                for idx, row in enumerate(self.dependent_demand[item][location]):
+                for idx, row in enumerate(dependent_demand):
                     destination_location = row[0]
                     order_qty = row[1]
                     if order_qty == 0:
                         continue
                     ship_qty = min(order_qty, on_hand_qty)
+                    data['shipped_qty'] += ship_qty
                     self.start_transit(item, location, destination_location, ship_qty, t)
-                    on_hand_qty = self.on_hand_inv[item][location]
-                    self.dependent_demand[item][location][idx] = (destination_location, order_qty - ship_qty)
+                    on_hand_qty = data['on_hand_qty']
+                    data['dependent_demand'][idx] = (destination_location, order_qty - ship_qty)
                     if on_hand_qty == 0:
                         break
-                while len(self.dependent_demand[item][location]) > 0 \
-                        and self.dependent_demand[item][location][0][1] == 0:
-                    self.dependent_demand[item][location].pop(0)
+                while len(data['dependent_demand']) > 0 and data['dependent_demand'][0][1] == 0:
+                    data['dependent_demand'].pop(0)
 
     def start_transit(self, item, location, destination, qty, t):
         if qty == 0:
             return
-        mu, sigma = self.inv_data[item][destination]['lead_time']
+        data  = self.inv_data[item][destination]
+        mu, sigma = data['lead_time']
         lt = round(normalvariate(mu, sigma), 0)
         if lt < 0:
             lt = 0
-        self.on_hand_inv[item][location] -= qty
-        if t+lt not in self.in_transit[item][destination]:
-            self.in_transit[item][destination][t + lt] = 0
-        self.in_transit[item][destination][t + lt] += qty
+        self.inv_data[item][location]['on_hand_qty'] -= qty
+        if t+lt not in data['transit_qty']:
+            data['transit_qty'][t + lt] = 0
+        data['transit_qty'][t + lt] += qty
 
     def start_production(self, item, location, qty, t):
         if qty == 0:
             return
-        mu, sigma = self.inv_data[item][location]['lead_time']
+        data = self.inv_data[item][location]
+        mu, sigma = data['lead_time']
         lt = round(normalvariate(mu, sigma), 0)
         if lt < 0:
             lt = 0
-        if t+lt not in self.in_transit[item][location]:
-            self.in_transit[item][location][t+lt] = 0
-        self.in_transit[item][location][t+lt] += qty
+        if t+lt not in data['wip_qty']:
+            data['wip_qty'][t+lt] = 0
+        data['wip_qty'][t+lt] += qty
 
     def receive_in_transit(self, t):
-        for item in self.in_transit:
-            for location in self.in_transit[item]:
-                if t in self.in_transit[item][location]:
-                    qty = self.in_transit[item][location][t]
-                    self.received_qty[item][location] += qty
-                    self.on_hand_inv[item][location] += qty
-                    self.in_transit[item][location][t] = 0
+        for item in self.inv_data:
+            for location in self.inv_data[item]:
+                data = self.inv_data[item][location]
+                qty = data['transit_qty'].get(t, 0) + data['wip_qty'].get(t, 0)
+                if qty > 0:
+                    data['receipt_qty'] += qty
+                    data['on_hand_qty'] += qty
+                    data['transit_qty'][t] = 0
+                    data['wip_qty'][t] = 0
 
     def initialize_opening_inv(self):
-        self.opening_inventory = deepcopy(self.on_hand_inv)
-        self.shipped_qty = deepcopy(self.zero_dict)
-        self.received_qty = deepcopy(self.zero_dict)
-        self.ordered_qty = deepcopy(self.zero_dict)
+        for item in self.inv_data:
+            for location in self.inv_data[item]:
+                data = self.inv_data[item][location]
+                data['opening_inv'] = data['on_hand_qty']
+                data['receipt_qty'] = 0
+                data['ordered_qty'] = 0
+                data['shipped_qty'] = 0
+                data['open_orders'] = 0
+                demand_mean, demand_std_dev = data['demand']
+                if demand_mean > 0:
+                    demand_qty = normalvariate(demand_mean, demand_std_dev) / 7
+                    data['forecast_qty'] = demand_qty
+                else:
+                    data['forecast_qty'] = 0
 
     def daily_process(self, t, conn):
         self.initialize_opening_inv()
-        self.update_demand()
         self.receive_in_transit(t)
         self.ship_backorders()
         self.ship_local_demand()
@@ -170,21 +163,24 @@ class SupplyChain:
     def write_data(self, t, conn):
         for item in self.inv_data:
             for location in self.inv_data[item]:
-                opening_qty = self.opening_inventory.get(item, {}).get(location, 0)
-                source_location = self.tp_data.get(item, {}).get(location, None)
-                forecast_qty = self.local_demand.get(item, {}).get(location, 0)
-                shipped_qty = self.shipped_qty.get(item, {}).get(location, 0)
-                received_qty = self.received_qty.get(item, {}).get(location, 0)
-                order_qty = self.ordered_qty.get(item, {}).get(location, 0)
-                backorder_qty = self.backorders.get(item, {}).get(location, 0)
-                in_transit_dict = self.in_transit.get(item, {}).get(location, {})
+                data = self.inv_data[item][location]
+                opening_qty = data['opening_inv']
+                source_location = data['source']
+                forecast_qty = data['forecast_qty']
+                shipped_qty = data['shipped_qty']
+                received_qty = data['receipt_qty']
+                order_qty = data['ordered_qty']
+                backorder_qty = data['backorder_qty']
+                in_transit_dict = data['transit_qty']
                 in_transit_qty = sum(in_transit_dict[t] for t in in_transit_dict)
-                dependent_list = self.dependent_demand.get(item, {}).get(location, [])
+                wip_dict = data['wip_qty']
+                wip_qty = sum(wip_dict[t] for t in wip_dict)
+                dependent_list = data['dependent_demand']
                 backorder_qty += sum(i[1] for i in dependent_list)
-                closing_qty = self.on_hand_inv.get(item, {}).get(location, 0)
+                closing_qty = data['on_hand_qty']
                 data_row = (item, location, source_location, t, forecast_qty, order_qty,
                             in_transit_qty, received_qty, opening_qty, closing_qty,
-                            shipped_qty, backorder_qty)
+                            shipped_qty, backorder_qty, wip_qty)
                 conn.execute(planning_insert_query, data_row)
 
 

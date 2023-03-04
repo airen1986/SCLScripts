@@ -4,7 +4,7 @@ from .sc_class import SupplyChain
 
 def main(conn):
     scc_obj = SupplyChain(conn)
-    n_periods = 1000
+    n_periods = 100
     generate_demand(scc_obj, n_periods, conn)
 
 

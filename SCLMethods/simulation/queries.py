@@ -17,3 +17,17 @@ get_inventory_sql = """select Inventory.ITEMCODE,
 
 get_transportation_sql = """SELECT ItemCode, ToLocationCode, FromLocationCode
                             FROM Transportation"""
+
+planning_insert_query = """insert into planning_data (ItemCode ,
+                                LocationCode ,
+                                FromLocationCode, 
+                                Period, 
+                                ForecastQuantity, 
+                                OrderQuantity, 
+                                InTransitQuantity, 
+                                ReceivingQuantity,
+                                OpeningInventory,
+                                ClosingInventory,
+                                ShipQuantity,
+                                BackorderedQuantity)
+                            Values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""

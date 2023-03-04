@@ -3,6 +3,7 @@ from .queries import get_inventory_sql, get_transportation_sql
 
 def get_inventory_data(conn):
     inventory = {}
+    zero_dict = {}
     for item, location, moq, lt_mean, lt_std_dev, demand_mean, demand_std_dev, r_val \
             in conn.execute(get_inventory_sql):
         demand = (float(demand_mean), float(demand_std_dev))
@@ -11,9 +12,11 @@ def get_inventory_data(conn):
                     'moq': float(moq), 'r_val': float(r_val)}
         if item not in inventory:
             inventory[item] = {location: row_dict}
+            zero_dict[item] = {location: 0}
         else:
             inventory[item][location] = row_dict
-    return inventory
+            zero_dict[item][location] = 0
+    return inventory, zero_dict
 
 
 def get_transportation(conn):

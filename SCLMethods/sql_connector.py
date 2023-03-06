@@ -28,6 +28,11 @@ class SccCursor:
         self.conn.execute("COMMIT")
         self.conn.execute("BEGIN")
 
+    def run_block(self, query):
+        self.conn.execute("COMMIT")
+        self.conn.execute(query)
+        self.conn.execute("BEGIN")
+
     def get_db_path(self):
         return self.db_path
 

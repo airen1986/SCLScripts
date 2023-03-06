@@ -79,3 +79,35 @@ get_combinations_sql = """select  D_Inventory.ItemCode,
                         GROUP BY D_Inventory.ItemCode, 
                                  D_Inventory.LOCATIONCODE"""
 
+create_output_tables = """PRAGMA foreign_keys = off;
+                            BEGIN TRANSACTION;
+                            
+                            DROP TABLE IF EXISTS I_ActiveCombinations;
+                            
+                            -- Table: I_ActiveCombinations
+                            CREATE TABLE I_ActiveCombinations (ItemCode VARCHAR, LocationCode VARCHAR);
+                            
+                            DROP TABLE IF EXISTS T_PlanningData;
+                            
+                            CREATE TABLE T_PlanningData (
+                                ItemCode             VARCHAR,
+                                LocationCode         VARCHAR,
+                                FromLocationCode     VARCHAR,
+                                Period               INTEGER,
+                                ForecastQuantity     NUMERIC,
+                                OrderQuantity        NUMERIC,
+                                InTransitQuantity    NUMERIC,
+                                WIPQuantity          NUMERIC,
+                                ReceivingQuantity    NUMERIC,
+                                OpeningInventory     NUMERIC,
+                                ProjectedInventory   NUMERIC,
+                                ClosingInventory     NUMERIC,
+                                ShipQuantity         NUMERIC,
+                                BackorderQuantity    NUMERIC,
+                                ProductionBackorder  NUMERIC,
+                                ConsumptionBackorder NUMERIC,
+                                ConsumedQuantity     NUMERIC
+                            );
+                            
+                            COMMIT TRANSACTION;
+                            PRAGMA foreign_keys = on;"""

@@ -1,11 +1,12 @@
 from random import normalvariate
 from .queries import planning_insert_query, delete_planning_data
-from .get_data import get_combinations
+from .get_data import get_combinations, get_bom
 
 
 class SupplyChain:
     def __init__(self, conn):
         self.inv_data = get_combinations(conn)
+        self.bom_relation = get_bom(conn)
         self.open_orders = {}
         conn.execute(delete_planning_data)
         conn.intermediate_commit()
@@ -43,7 +44,10 @@ class SupplyChain:
                 if source_location:
                     receipt_qty += sum(row[1] if row[0] == location else 0 for row in
                                        self.inv_data[item][source_location]['dependent_demand'])
+                else:
+                    receipt_qty += data['production_backorder']
                 receipt_qty -= sum(row[1] for row in data['dependent_demand'])
+                receipt_qty -= data['consumption_backorder']
                 projected_inv = data['on_hand_qty'] + receipt_qty - data['backorder_qty']
 
                 if projected_inv <= data['r_val']:
@@ -63,7 +67,10 @@ class SupplyChain:
                 i += 1
                 source = data['source']
                 if source is None:
-                    self.start_production(item, location, qty, t)
+                    data['production_backorder'] += qty
+                    for component, usage_qty in self.bom_relation.get(item, {}).get(location, []):
+                        required_qty = usage_qty * qty
+                        self.inv_data[component][location]['consumption_backorder'] += required_qty
                 else:
                     self.inv_data[item][source]['dependent_demand'].append((location, qty))
                 data['open_orders'] = 0
@@ -105,6 +112,22 @@ class SupplyChain:
             data['transit_qty'][t + lt] = 0
         data['transit_qty'][t + lt] += qty
 
+    def process_production(self, t):
+        for item in self.inv_data:
+            for location in self.inv_data[item]:
+                data = self.inv_data[item][location]
+                production_qty = data['production_backorder']
+                if production_qty == 0:
+                    continue
+                init_production = 1
+                for component, usage_qty in self.bom_relation.get(item, {}).get(location, []):
+                    required_qty = usage_qty * production_qty
+                    if self.inv_data[component][location]['on_hand_qty'] < required_qty:
+                        init_production = 0
+                if init_production == 1:
+                    self.start_production(item, location, production_qty, t)
+                    data['production_backorder'] -= production_qty
+
     def start_production(self, item, location, qty, t):
         if qty == 0:
             return
@@ -116,6 +139,11 @@ class SupplyChain:
         if t+lt not in data['wip_qty']:
             data['wip_qty'][t+lt] = 0
         data['wip_qty'][t+lt] += qty
+        for component, usage_qty in self.bom_relation.get(item, {}).get(location, []):
+            required_qty = usage_qty * qty
+            self.inv_data[component][location]['on_hand_qty'] -= required_qty
+            self.inv_data[component][location]['consumption_backorder'] -= required_qty
+            self.inv_data[component][location]['consumed_qty'] += required_qty
 
     def receive_in_transit(self, t):
         for item in self.inv_data:
@@ -137,6 +165,7 @@ class SupplyChain:
                 data['ordered_qty'] = 0
                 data['shipped_qty'] = 0
                 data['open_orders'] = 0
+                data['consumed_qty'] = 0
                 demand_mean, demand_std_dev = data['demand']
                 if demand_mean > 0:
                     demand_qty = normalvariate(demand_mean, demand_std_dev) / 7
@@ -147,6 +176,7 @@ class SupplyChain:
     def daily_process(self, t, conn):
         self.initialize_opening_inv()
         self.receive_in_transit(t)
+        self.process_production(t)
         self.ship_backorders()
         self.ship_local_demand()
         self.ship_dependent_demand(t)
@@ -155,6 +185,7 @@ class SupplyChain:
         while j > 0:
             self.ship_dependent_demand(t)
             self.receive_in_transit(t)
+            self.process_production(t)
             self.ship_backorders()
             self.inventory_control()
             j = self.process_orders(t)
@@ -178,9 +209,13 @@ class SupplyChain:
                 dependent_list = data['dependent_demand']
                 backorder_qty += sum(i[1] for i in dependent_list)
                 closing_qty = data['on_hand_qty']
+                production_backorder =  data['production_backorder']
+                consumption_backorder = data['consumption_backorder']
+                consumed_qty = data['consumed_qty']
                 data_row = (item, location, source_location, t, forecast_qty, order_qty,
                             in_transit_qty, received_qty, opening_qty, closing_qty,
-                            shipped_qty, backorder_qty, wip_qty)
+                            shipped_qty, backorder_qty, wip_qty, production_backorder,
+                            consumption_backorder, consumed_qty)
                 conn.execute(planning_insert_query, data_row)
 
 

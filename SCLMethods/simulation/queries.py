@@ -12,8 +12,11 @@ planning_insert_query = """Insert into T_PlanningData (ItemCode ,
                                 ClosingInventory,
                                 ShipQuantity,
                                 BackorderQuantity,
-                                WIPQuantity)
-                            Values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+                                WIPQuantity,
+                                ProductionBackorder,
+                                ConsumptionBackorder,
+                                ConsumedQuantity)
+                            Values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 insert_forecast_query = """ INSERT INTO I_ActiveCombinations (ItemCode, LocationCode)
                             SELECT DISTINCT ItemCode, LocationCode
@@ -33,15 +36,19 @@ tp_insert_query = """INSERT INTO I_ActiveCombinations (ItemCode, LocationCode)
                         AND   ia1.LocationCode = dt.ToLocationCode
                         and   ia2.LocationCode is NULL"""
 
-bom_insert_query = """WITH T1
-                        AS
-                        (
-                        SELECT distinct dop.ItemCode, dop.LocationCode, db.ItemCode FromItemCode
+get_bom_query = """SELECT distinct dop.ItemCode, dop.LocationCode, db.ItemCode FromItemCode, 
+                    db.usageQuantity
                         FROM D_OperationProcess dop,
                              D_BOMInventoryRequirement db
                         WHERE dop.LocationCode = db.LocationCode
-                        and   dop.BOMCode = db.BOMCode
+                        and   dop.BOMCode = db.BOMCode"""
+
+bom_insert_query = f"""WITH T1
+                        AS
+                        (
+                        {get_bom_query}
                         )
+                        INSERT INTO I_ActiveCombinations (ItemCode, LocationCode)
                         SELECT DISTINCT T1.FromItemCode, T1.LocationCode
                         FROM I_ActiveCombinations ia1,
                              T1
@@ -57,8 +64,9 @@ get_combinations_sql = """select  D_Inventory.ItemCode,
                                 D_Transportation.FromLocationCode,
                                 ifnull(D_Inventory.DEMANDMEAN, 0) as DEMANDMEAN,
                                 ifnull(D_Inventory.DEMANDSTDDEV,0) as DEMANDSTDDEV,
-                                ifnull(D_Inventory.MINIMUMORDERQUANTITY,0) as MINIMUMORDERQUANTITY,
-                                D_Inventory.R_Value as R_Value,
+                                ifnull(ifnull(D_Transportation.MinimumShipmentQuantity, 
+                                        D_Inventory.MINIMUMORDERQUANTITY),0) as MINIMUMORDERQUANTITY,
+                                IFNULL(D_Inventory.R_Value, 0) as R_Value,
                                 max(ifnull(ifnull(D_Transportation.TRANSPORTATIONLTMEAN, D_Inventory.PRODUCTIONLTMEAN),0)) as LTMean,
                                 ifnull(ifnull(D_Transportation.TRANSPORTATIONLTSTDDEV, D_Inventory.PRODUCTIONLTSTDDEV),0) as LTStdDev
                         from I_ActiveCombinations,

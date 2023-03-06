@@ -25,13 +25,26 @@ def get_combinations(conn):
             'lead_time': (float(row[7]), float(row[8])), 'opening_inv': 0,
             'backorder_qty': 0, 'forecast_qty': 0, 'shipped_qty': 0, 'ordered_qty': 0,
             'transit_qty': {}, 'wip_qty': {}, 'dependent_demand': [], 'receipt_qty': 0,
-            'open_orders': 0
+            'open_orders': 0, 'consumed_qty': 0, 'production_backorder': 0,
+            'consumption_backorder': 0
         }
         if item not in item_locations:
             item_locations[item] = {location: data_dict}
         else:
             item_locations[item][location] = data_dict
     return item_locations
+
+
+def get_bom(conn):
+    bom_rel = {}
+    for item, location, component, qty in conn.execute(get_bom_query):
+        if item not in bom_rel:
+            bom_rel[item] = {location: []}
+        elif location not in bom_rel[item]:
+            bom_rel[item][location] = []
+        bom_rel[item][location].append((component, qty))
+    return bom_rel
+
 
 
 

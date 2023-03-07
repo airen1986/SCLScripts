@@ -15,8 +15,9 @@ planning_insert_query = """Insert into T_PlanningData (ItemCode ,
                                 WIPQuantity,
                                 ProductionBackorder,
                                 ConsumptionBackorder,
-                                ConsumedQuantity)
-                            Values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+                                ConsumedQuantity,
+                                OrderReceivedQuantity)
+                            Values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 insert_forecast_query = """ INSERT INTO I_ActiveCombinations (ItemCode, LocationCode)
                             SELECT DISTINCT ItemCode, LocationCode
@@ -106,8 +107,20 @@ create_output_tables = """PRAGMA foreign_keys = off;
                                 BackorderQuantity    NUMERIC,
                                 ProductionBackorder  NUMERIC,
                                 ConsumptionBackorder NUMERIC,
-                                ConsumedQuantity     NUMERIC
+                                ConsumedQuantity     NUMERIC,
+                                OrderReceivedQuantity NUMERIC
                             );
+                            
+                            DROP VIEW IF EXISTS OutputServiceLevel;
+                            
+                            CREATE VIEW OutputServiceLevel
+                            AS
+                            SELECT  ItemCode, 
+                                    LocationCode, 
+                                    sum(min(ShipQuantity + ConsumedQuantity,ForecastQuantity + OrderReceivedQuantity))/sum(ForecastQuantity + OrderReceivedQuantity) as serviceLevel
+                            FROM T_PlanningData
+                            WHERE Period > 700
+                            GROUP BY ItemCode, LocationCode;
                             
                             COMMIT TRANSACTION;
                             PRAGMA foreign_keys = on;"""

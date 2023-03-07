@@ -26,7 +26,7 @@ def get_combinations(conn):
             'backorder_qty': 0, 'forecast_qty': 0, 'shipped_qty': 0, 'ordered_qty': 0,
             'transit_qty': {}, 'wip_qty': {}, 'dependent_demand': [], 'receipt_qty': 0,
             'open_orders': 0, 'consumed_qty': 0, 'production_backorder': 0,
-            'consumption_backorder': 0
+            'consumption_backorder': 0, 'negative_forecast': 0, 'order_received': 0
         }
         if item not in item_locations:
             item_locations[item] = {location: data_dict}

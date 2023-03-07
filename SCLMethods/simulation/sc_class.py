@@ -1,4 +1,6 @@
+import random
 from random import normalvariate
+from math import sqrt
 from .queries import planning_insert_query, delete_planning_data
 from .get_data import get_combinations, get_bom
 
@@ -8,6 +10,7 @@ class SupplyChain:
         self.inv_data = get_combinations(conn)
         self.bom_relation = get_bom(conn)
         self.open_orders = {}
+        #random.seed(143)
         conn.execute(delete_planning_data)
         conn.intermediate_commit()
 
@@ -71,8 +74,10 @@ class SupplyChain:
                     for component, usage_qty in self.bom_relation.get(item, {}).get(location, []):
                         required_qty = usage_qty * qty
                         self.inv_data[component][location]['consumption_backorder'] += required_qty
+                        self.inv_data[component][location]['order_received'] += required_qty
                 else:
                     self.inv_data[item][source]['dependent_demand'].append((location, qty))
+                    self.inv_data[item][source]['order_received'] += qty
                 data['open_orders'] = 0
         return i
 
@@ -146,6 +151,7 @@ class SupplyChain:
             self.inv_data[component][location]['consumed_qty'] += required_qty
 
     def receive_in_transit(self, t):
+        received = False
         for item in self.inv_data:
             for location in self.inv_data[item]:
                 data = self.inv_data[item][location]
@@ -155,6 +161,8 @@ class SupplyChain:
                     data['on_hand_qty'] += qty
                     data['transit_qty'][t] = 0
                     data['wip_qty'][t] = 0
+                    received = True
+        return received
 
     def initialize_opening_inv(self):
         for item in self.inv_data:
@@ -163,15 +171,19 @@ class SupplyChain:
                 data['opening_inv'] = data['on_hand_qty']
                 data['receipt_qty'] = 0
                 data['ordered_qty'] = 0
+                data['order_received'] = 0
                 data['shipped_qty'] = 0
                 data['open_orders'] = 0
                 data['consumed_qty'] = 0
                 demand_mean, demand_std_dev = data['demand']
+                data['forecast_qty'] = 0
                 if demand_mean > 0:
-                    demand_qty = normalvariate(demand_mean, demand_std_dev) / 7
-                    data['forecast_qty'] = demand_qty
-                else:
-                    data['forecast_qty'] = 0
+                    demand_qty = normalvariate(demand_mean/7, demand_std_dev/sqrt(7)) - data['negative_forecast']
+                    if demand_qty > 0:
+                        data['forecast_qty'] = demand_qty
+                        data['negative_forecast'] = 0
+                    else:
+                        data['negative_forecast'] = -demand_qty
 
     def daily_process(self, t, conn):
         self.initialize_opening_inv()
@@ -183,12 +195,17 @@ class SupplyChain:
         self.inventory_control()
         j = self.process_orders(t)
         while j > 0:
-            self.ship_dependent_demand(t)
-            self.receive_in_transit(t)
             self.process_production(t)
-            self.ship_backorders()
+            self.ship_dependent_demand(t)
             self.inventory_control()
             j = self.process_orders(t)
+        received = self.receive_in_transit(t)
+        while received:
+            self.process_production(t)
+            self.ship_backorders()
+            self.ship_dependent_demand(t)
+            received = self.receive_in_transit(t)
+
         self.write_data(t, conn)
 
     def write_data(self, t, conn):
@@ -211,11 +228,12 @@ class SupplyChain:
                 closing_qty = data['on_hand_qty']
                 production_backorder =  data['production_backorder']
                 consumption_backorder = data['consumption_backorder']
+                order_received_qty = data['order_received']
                 consumed_qty = data['consumed_qty']
                 data_row = (item, location, source_location, t, forecast_qty, order_qty,
                             in_transit_qty, received_qty, opening_qty, closing_qty,
                             shipped_qty, backorder_qty, wip_qty, production_backorder,
-                            consumption_backorder, consumed_qty)
+                            consumption_backorder, consumed_qty, order_received_qty)
                 conn.execute(planning_insert_query, data_row)
 
 
